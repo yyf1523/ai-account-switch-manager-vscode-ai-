@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from tkinter import END, BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, Toplevel, filedialog, messagebox
 from tkinter import ttk
@@ -45,6 +46,7 @@ TEXT = {
         "subtitle": "账号登录一次长期保存，工作空间自动切换专属环境",
         "login_hint": "将打开该账号的专属浏览器窗口；请在里面登录对应邮箱，登录态会保存在账号目录。",
         "switch_hint": "已切换账号。已打开的 VS Code 不会自动换环境，请重新打开对应工作空间。",
+        "checking": "正在检测账号状态...",
         "lang": "English",
     },
     "en": {
@@ -75,6 +77,7 @@ TEXT = {
         "subtitle": "Login once, keep sessions, and auto-switch accounts per workspace",
         "login_hint": "A dedicated browser window will open for this account. Sign in with the matching email; the session stays in the account folder.",
         "switch_hint": "Account switched. Existing VS Code windows keep their old environment; reopen the workspace.",
+        "checking": "Checking account status...",
         "lang": "中文",
     },
 }
@@ -212,6 +215,20 @@ def resolve_command(command: str) -> str:
     return found or ""
 
 
+def provider_runtime_command(provider: dict) -> str:
+    command = resolve_command(provider.get("command", ""))
+    if provider.get("id") != "claude" or not command:
+        return command
+    path = Path(command)
+    roots = [path.parent, Path(r"D:\WorkForTellHow\project\dev-tool\npm-global"), Path(r"D:\360MoveData\Users\zwgp2\Desktop\WorkForTellHow\project\dev-tool\npm-global")]
+    for root in roots:
+        candidate = root / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+        if candidate.exists():
+            # -claude-fix- Prefer Claude's native exe over claude.cmd to avoid visible cmd windows.
+            return str(candidate)
+    return command
+
+
 def split_args(args: str) -> list[str]:
     if not args:
         return []
@@ -310,6 +327,8 @@ class AccountManagerApp:
         self.login_buttons: dict[str, ttk.Button] = {}
         self.switch_buttons: dict[str, ttk.Button] = {}
         self.refreshing = False
+        self.status_checking = False
+        self.status_window: Toplevel | None = None
         self.workspace_var = StringVar()
         self.path_var = StringVar()
         self.account_provider_var = StringVar()
@@ -318,7 +337,8 @@ class AccountManagerApp:
         self.log_var = StringVar()
         self.build_ui()
         self.apply_language()
-        self.refresh_all()
+        self.refresh_all(check_status=False)
+        self.root.after(150, self.start_status_check)
 
     def t(self, key: str) -> str:
         lang = self.config.get("settings", {}).get("language", "zh")
@@ -385,7 +405,7 @@ class AccountManagerApp:
         self.open_vscode_button.pack(side=LEFT, padx=4)
         self.save_button = ttk.Button(workspace, command=self.save_workspace_mappings)
         self.save_button.pack(side=LEFT, padx=4)
-        self.refresh_button = ttk.Button(workspace, command=self.refresh_status_grid)
+        self.refresh_button = ttk.Button(workspace, command=self.start_status_check)
         self.refresh_button.pack(side=LEFT, padx=4)
 
         path_frame = ttk.Frame(self.root, padding=(16, 0, 16, 8))
@@ -484,7 +504,7 @@ class AccountManagerApp:
         self.apply_language()
         self.refresh_all()
 
-    def refresh_all(self) -> None:
+    def refresh_all(self, check_status: bool = True) -> None:
         self.refreshing = True
         names = [w["name"] for w in sorted(self.config["workspaces"], key=lambda x: x["name"])]
         self.workspace_box["values"] = names
@@ -498,7 +518,8 @@ class AccountManagerApp:
         self.refresh_cli_controls()
         self.refresh_workspace_selection()
         self.refresh_accounts_grid()
-        self.refresh_status_grid()
+        if check_status:
+            self.start_status_check()
 
     def selected_workspace(self) -> dict | None:
         name = self.workspace_var.get()
@@ -642,7 +663,7 @@ class AccountManagerApp:
         provider = provider_by_id(self.config, provider_id)
         if not workspace or not provider:
             return
-        command = resolve_command(provider.get("command", ""))
+        command = provider_runtime_command(provider)
         if not command:
             messagebox.showwarning(APP_NAME, self.t("no_cli"))
             return
@@ -668,6 +689,9 @@ class AccountManagerApp:
             env=env,
             creationflags=hidden_process_flags() if login else detached_flags(),
             startupinfo=hidden_startupinfo() if login else None,
+            stdin=subprocess.DEVNULL if login else None,
+            stdout=subprocess.DEVNULL if login else None,
+            stderr=subprocess.DEVNULL if login else None,
         )
 
     def switch_provider_account(self, provider_id: str) -> None:
@@ -757,11 +781,61 @@ class AccountManagerApp:
             provider = provider_by_id(self.config, account["provider"])
             if not provider:
                 continue
-            command = resolve_command(provider.get("command", ""))
+            command = provider_runtime_command(provider)
             cli = self.t("cli_ok") if command else self.t("cli_missing")
             status = self.account_status(provider, account, command) if command else self.t("cli_missing")
             self.status_tree.insert("", END, values=(account["provider"], account["id"], account["email"], cli, status))
         self.refresh_cli_controls()
+        self.log("Status refreshed.")
+
+    def start_status_check(self) -> None:
+        if self.status_checking:
+            return
+        self.status_checking = True
+        self.refresh_button.configure(state="disabled")
+        self.log(self.t("checking"))
+        self.show_status_window()
+
+        def worker() -> None:
+            rows = []
+            for account in list(self.config["accounts"]):
+                provider = provider_by_id(self.config, account["provider"])
+                if not provider:
+                    continue
+                command = provider_runtime_command(provider)
+                cli = self.t("cli_ok") if command else self.t("cli_missing")
+                status = self.account_status(provider, account, command) if command else self.t("cli_missing")
+                rows.append((account["provider"], account["id"], account["email"], cli, status))
+            self.root.after(0, lambda: self.finish_status_check(rows))
+
+        # -claude-fix- Run slow CLI status checks in the background while showing an in-app progress window.
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_status_window(self) -> None:
+        if self.status_window and self.status_window.winfo_exists():
+            return
+        self.status_window = Toplevel(self.root)
+        self.status_window.title(self.t("checking"))
+        self.status_window.configure(bg="#f8f4ff")
+        self.status_window.resizable(False, False)
+        self.status_window.transient(self.root)
+        self.status_window.geometry("360x120+220+180")
+        ttk.Label(self.status_window, text=self.t("checking"), style="Hero.TLabel").pack(padx=24, pady=(22, 10))
+        progress = ttk.Progressbar(self.status_window, mode="indeterminate", length=280)
+        progress.pack(padx=24, pady=(0, 18))
+        progress.start(12)
+        self.status_window.protocol("WM_DELETE_WINDOW", lambda: None)
+
+    def finish_status_check(self, rows: list[tuple[str, str, str, str, str]]) -> None:
+        self.status_tree.delete(*self.status_tree.get_children())
+        for row in rows:
+            self.status_tree.insert("", END, values=row)
+        self.refresh_cli_controls()
+        self.status_checking = False
+        self.refresh_button.configure(state="normal")
+        if self.status_window and self.status_window.winfo_exists():
+            self.status_window.destroy()
+        self.status_window = None
         self.log("Status refreshed.")
 
     def account_status(self, provider: dict, account: dict, command: str) -> str:
@@ -779,6 +853,8 @@ class AccountManagerApp:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                creationflags=hidden_process_flags(),
+                startupinfo=hidden_startupinfo(),
             )
             output = (result.stdout or "") + (result.stderr or "")
             if provider["id"] == "claude":
