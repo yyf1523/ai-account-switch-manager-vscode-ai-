@@ -343,6 +343,7 @@ class AccountManagerApp:
         self.refreshing = False
         self.status_checking = False
         self.status_window: Toplevel | None = None
+        self.login_poll_jobs: dict[tuple[str, str], int] = {}
         self.workspace_var = StringVar()
         self.path_var = StringVar()
         self.account_provider_var = StringVar()
@@ -707,6 +708,8 @@ class AccountManagerApp:
             stdout=subprocess.DEVNULL if login else None,
             stderr=subprocess.DEVNULL if login else None,
         )
+        if login:
+            self.start_login_status_poll(provider, account)
 
     def switch_provider_account(self, provider_id: str) -> None:
         workspace = self.selected_workspace()
@@ -851,6 +854,36 @@ class AccountManagerApp:
             self.status_window.destroy()
         self.status_window = None
         self.log("Status refreshed.")
+
+    def start_login_status_poll(self, provider: dict, account: dict, attempts: int = 36) -> None:
+        key = (account["provider"], account["id"])
+        old_job = self.login_poll_jobs.pop(key, None)
+        if old_job is not None:
+            self.root.after_cancel(old_job)
+
+        def poll(remaining: int) -> None:
+            command = provider_runtime_command(provider)
+            cli = self.t("cli_ok") if command else self.t("cli_missing")
+            status = self.account_status(provider, account, command) if command else self.t("cli_missing")
+            self.update_status_row(account, cli, status)
+            if status == self.t("cli_ok") or remaining <= 1:
+                self.login_poll_jobs.pop(key, None)
+                self.log(f"{account['provider']} {account['id']} -> {status}")
+                return
+            job = self.root.after(5000, lambda: poll(remaining - 1))
+            self.login_poll_jobs[key] = job
+
+        # -claude-fix- After login, poll only the selected account so the UI updates without rescanning every account.
+        self.login_poll_jobs[key] = self.root.after(5000, lambda: poll(attempts))
+
+    def update_status_row(self, account: dict, cli: str, status: str) -> None:
+        values = (account["provider"], account["id"], account["email"], cli, status)
+        for item in self.status_tree.get_children():
+            row = self.status_tree.item(item, "values")
+            if len(row) >= 2 and row[0] == account["provider"] and row[1] == account["id"]:
+                self.status_tree.item(item, values=values)
+                return
+        self.status_tree.insert("", END, values=values)
 
     def account_status(self, provider: dict, account: dict, command: str) -> str:
         status_args = provider.get("statusArgs", "")
