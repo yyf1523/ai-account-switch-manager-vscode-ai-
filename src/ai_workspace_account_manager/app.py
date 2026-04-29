@@ -44,7 +44,7 @@ TEXT = {
         "no_cli": "该平台 CLI 不存在，请先安装或在 config.json 配置 command。",
         "no_vscode": "未找到 VS Code，请在 config.json 配置 settings.vscodeCommand。",
         "subtitle": "账号登录一次长期保存，工作空间自动切换专属环境",
-        "login_hint": "将打开该账号的专属浏览器窗口；请在里面登录对应邮箱，登录态会保存在账号目录。",
+        "login_hint": "将打开该身份的专属浏览器窗口和 mail.com；同一邮箱的多个 AI 平台会复用登录态。",
         "switch_hint": "已切换账号。已打开的 VS Code 不会自动换环境，请重新打开对应工作空间。",
         "checking": "正在检测账号状态...",
         "lang": "English",
@@ -75,7 +75,7 @@ TEXT = {
         "no_cli": "This provider CLI is missing. Install it or set command in config.json.",
         "no_vscode": "VS Code was not found. Set settings.vscodeCommand in config.json.",
         "subtitle": "Login once, keep sessions, and auto-switch accounts per workspace",
-        "login_hint": "A dedicated browser window will open for this account. Sign in with the matching email; the session stays in the account folder.",
+        "login_hint": "A dedicated browser window and mail.com will open for this identity; AI platforms sharing one email reuse the session.",
         "switch_hint": "Account switched. Existing VS Code windows keep their old environment; reopen the workspace.",
         "checking": "Checking account status...",
         "lang": "中文",
@@ -260,15 +260,16 @@ def hidden_startupinfo() -> subprocess.STARTUPINFO | None:
 
 def find_browser_executable() -> str:
     candidates = [
-        os.environ.get("PROGRAMFILES", "") + r"\Microsoft\Edge\Application\msedge.exe",
-        os.environ.get("PROGRAMFILES(X86)", "") + r"\Microsoft\Edge\Application\msedge.exe",
         os.environ.get("PROGRAMFILES", "") + r"\Google\Chrome\Application\chrome.exe",
         os.environ.get("PROGRAMFILES(X86)", "") + r"\Google\Chrome\Application\chrome.exe",
+        os.environ.get("PROGRAMFILES", "") + r"\Microsoft\Edge\Application\msedge.exe",
+        os.environ.get("PROGRAMFILES(X86)", "") + r"\Microsoft\Edge\Application\msedge.exe",
     ]
     for candidate in candidates:
         if candidate and Path(candidate).exists():
             return candidate
-    return shutil.which("msedge") or shutil.which("chrome") or ""
+    # -claude-fix- Prefer Chrome for dedicated login profiles; Edge is only a fallback.
+    return shutil.which("chrome") or shutil.which("msedge") or ""
 
 
 def launch_browser_url(url: str) -> int:
@@ -277,22 +278,37 @@ def launch_browser_url(url: str) -> int:
     if not browser or not profile:
         return 1
     Path(profile).mkdir(parents=True, exist_ok=True)
+    urls = []
+    if os.environ.get("AIAM_OPEN_MAIL") == "1":
+        urls.append("https://www.mail.com/")
+    urls.append(url)
     # -claude-fix- Let the packaged Python app act as a no-console OAuth browser launcher.
-    subprocess.Popen([browser, f"--user-data-dir={profile}", "--no-first-run", "--new-window", url], creationflags=detached_flags())
+    subprocess.Popen([browser, f"--user-data-dir={profile}", "--no-first-run", "--new-window", *urls], creationflags=detached_flags())
     return 0
 
 
-def account_browser_launcher(account: dict) -> dict[str, str]:
+def account_browser_profile_key(account: dict) -> str:
+    if account.get("browserProfile"):
+        raw = account["browserProfile"]
+    else:
+        raw = account.get("email") or account.get("id") or "default"
+    return safe_path_segment(str(raw).strip().lower())
+
+
+def account_browser_launcher(account: dict, open_mail: bool = False) -> dict[str, str]:
     config_dir = Path(expand_path(account.get("configDir", "")))
     browser = find_browser_executable()
     if os.name != "nt" or not browser or not config_dir:
         return {}
-    browser_profile = config_dir / "browser-profile"
+    # -claude-fix- Share one browser profile across AI platforms for the same person/account identity.
+    browser_profile = app_dir() / "browser-profiles" / account_browser_profile_key(account)
     browser_profile.mkdir(parents=True, exist_ok=True)
     env = {
         "AIAM_BROWSER_EXE": browser,
         "AIAM_BROWSER_PROFILE_DIR": str(browser_profile),
     }
+    if open_mail:
+        env["AIAM_OPEN_MAIL"] = "1"
     if getattr(sys, "frozen", False):
         env["BROWSER"] = sys.executable
         return env
@@ -679,7 +695,7 @@ class AccountManagerApp:
             config_dir = expand_path(account["configDir"])
             Path(config_dir).mkdir(parents=True, exist_ok=True)
             env[provider["envVar"]] = config_dir
-            env.update(account_browser_launcher(account))
+            env.update(account_browser_launcher(account, open_mail=login))
         if login:
             self.log(f"{provider_id} login -> {account['id']} <{account.get('email', '')}>. {self.t('login_hint')}")
         # -claude-fix- Start provider CLIs directly with subprocess, keeping missing CLIs blocked by prior detection.
