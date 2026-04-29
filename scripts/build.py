@@ -10,6 +10,7 @@ from pathlib import Path
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     entry = repo_root / "run.py"
+    icon = repo_root / "assets" / "AIAccountManager.ico"
     dist = repo_root / "dist"
     build = repo_root / "build"
     dist.mkdir(exist_ok=True)
@@ -27,6 +28,9 @@ def main() -> int:
         "--windowed",
         "--name",
         "AIWorkspaceAccountManager",
+        # -claude-fix- Package the checked-in desktop icon so releases match the shortcut icon.
+        "--icon",
+        str(icon),
         "--distpath",
         str(dist),
         "--workpath",
