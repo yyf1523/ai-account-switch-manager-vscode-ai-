@@ -1,0 +1,64 @@
+{
+  "settings": {
+    "language": "zh",
+    "vscodeCommand": "code",
+    "profileRoot": "%LOCALAPPDATA%\\AIWorkspaceAccountManager\\vscode-profiles",
+    "accountRoot": "%USERPROFILE%\\.ai-workspace-account-manager\\accounts"
+  },
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "command": "codex",
+      "envVar": "CODEX_HOME",
+      "accountsRoot": "%USERPROFILE%\\.ai-workspace-account-manager\\accounts\\openai",
+      "statusArgs": "login status",
+      "loginArgs": "login"
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "command": "claude",
+      "envVar": "CLAUDE_CONFIG_DIR",
+      "accountsRoot": "%USERPROFILE%\\.ai-workspace-account-manager\\accounts\\claude",
+      "statusArgs": "auth status --text",
+      "loginArgs": "auth login --claudeai --email {email}"
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini",
+      "command": "gemini",
+      "envVar": "GEMINI_CONFIG_DIR",
+      "accountsRoot": "%USERPROFILE%\\.ai-workspace-account-manager\\accounts\\gemini",
+      "statusArgs": "--version",
+      "loginArgs": ""
+    },
+    {
+      "id": "glm",
+      "name": "GLM",
+      "command": "",
+      "envVar": "GLM_CONFIG_DIR",
+      "accountsRoot": "%USERPROFILE%\\.ai-workspace-account-manager\\accounts\\glm",
+      "statusArgs": "",
+      "loginArgs": ""
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "command": "",
+      "envVar": "DEEPSEEK_CONFIG_DIR",
+      "accountsRoot": "%USERPROFILE%\\.ai-workspace-account-manager\\accounts\\deepseek",
+      "statusArgs": "",
+      "loginArgs": ""
+    }
+  ],
+  "accounts": [],
+  "workspaces": [],
+  "defaults": {
+    "openai": "",
+    "claude": "",
+    "gemini": "",
+    "glm": "",
+    "deepseek": ""
+  }
+}

@@ -1,0 +1,18 @@
+# -claude-fix- Keep local builds and personal account configuration out of GitHub.
+bin/
+obj/
+dist/
+build/
+*.spec
+*.user
+*.suo
+*.cache
+__pycache__/
+*.pyc
+config.json
+vscode-profiles/
+accounts/
+.vs/
+.idea/
+# -claude-fix- Ignore the upstream seed repository copied beside this project.
+ai-account-switch-manager-vscode自动切换ai账号工具/

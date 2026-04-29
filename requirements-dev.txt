@@ -1,0 +1,2 @@
+# -claude-fix- Optional build dependency for creating a Windows executable.
+pyinstaller>=6.0
