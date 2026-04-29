@@ -278,12 +278,10 @@ def launch_browser_url(url: str) -> int:
     if not browser or not profile:
         return 1
     Path(profile).mkdir(parents=True, exist_ok=True)
-    urls = []
+    # -claude-fix- Open OAuth alone first so its signed query parameters are not affected by extra tabs.
+    subprocess.Popen([browser, f"--user-data-dir={profile}", "--no-first-run", "--new-window", url], creationflags=detached_flags())
     if os.environ.get("AIAM_OPEN_MAIL") == "1":
-        urls.append("https://www.mail.com/")
-    urls.append(url)
-    # -claude-fix- Let the packaged Python app act as a no-console OAuth browser launcher.
-    subprocess.Popen([browser, f"--user-data-dir={profile}", "--no-first-run", "--new-window", *urls], creationflags=detached_flags())
+        subprocess.Popen([browser, f"--user-data-dir={profile}", "--no-first-run", "https://www.mail.com/"], creationflags=detached_flags())
     return 0
 
 
