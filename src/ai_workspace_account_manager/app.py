@@ -231,6 +231,16 @@ def hidden_process_flags() -> int:
     return detached_flags() | getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def hidden_startupinfo() -> subprocess.STARTUPINFO | None:
+    if os.name != "nt":
+        return None
+    startupinfo = subprocess.STARTUPINFO()
+    # -claude-fix- Ensure cmd/bat login wrappers stay hidden even when Windows creates a shell host.
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return startupinfo
+
+
 def find_browser_executable() -> str:
     candidates = [
         os.environ.get("PROGRAMFILES", "") + r"\Microsoft\Edge\Application\msedge.exe",
@@ -657,6 +667,7 @@ class AccountManagerApp:
             cwd=workspace.get("cwd") or app_dir(),
             env=env,
             creationflags=hidden_process_flags() if login else detached_flags(),
+            startupinfo=hidden_startupinfo() if login else None,
         )
 
     def switch_provider_account(self, provider_id: str) -> None:
