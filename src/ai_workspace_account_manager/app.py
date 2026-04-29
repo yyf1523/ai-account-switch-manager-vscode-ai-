@@ -218,6 +218,56 @@ def detached_flags() -> int:
     return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
+def find_browser_executable() -> str:
+    candidates = [
+        os.environ.get("PROGRAMFILES", "") + r"\Microsoft\Edge\Application\msedge.exe",
+        os.environ.get("PROGRAMFILES(X86)", "") + r"\Microsoft\Edge\Application\msedge.exe",
+        os.environ.get("PROGRAMFILES", "") + r"\Google\Chrome\Application\chrome.exe",
+        os.environ.get("PROGRAMFILES(X86)", "") + r"\Google\Chrome\Application\chrome.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return shutil.which("msedge") or shutil.which("chrome") or ""
+
+
+def claude_browser_wrapper(account: dict) -> str:
+    config_dir = Path(expand_path(account.get("configDir", "")))
+    browser = find_browser_executable()
+    if os.name != "nt" or not browser or not config_dir:
+        return ""
+    browser_profile = config_dir / "browser-profile"
+    browser_profile.mkdir(parents=True, exist_ok=True)
+    wrapper = config_dir / "open-claude-login.cmd"
+    ps_wrapper = config_dir / "open-claude-login.ps1"
+    # -claude-fix- Open Claude OAuth in a per-account browser profile so login does not reuse another Claude.ai session.
+    ps_wrapper.write_text(
+        "\r\n".join(
+            [
+                "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Url)",
+                f"$browser = '{browser}'",
+                f"$profile = '{browser_profile}'",
+                "$arguments = @('--user-data-dir=' + $profile, '--no-first-run', '--new-window') + $Url",
+                "Start-Process -FilePath $browser -ArgumentList $arguments",
+                "",
+            ]
+        ),
+        encoding="ascii",
+    )
+    wrapper.write_text(
+        "\r\n".join(
+            [
+                "@echo off",
+                f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{ps_wrapper}" %*',
+                "exit /b 0",
+                "",
+            ]
+        ),
+        encoding="ascii",
+    )
+    return str(wrapper)
+
+
 class AccountManagerApp:
     def __init__(self) -> None:
         self.root = Tk()
@@ -505,6 +555,10 @@ class AccountManagerApp:
             config_dir = expand_path(account["configDir"])
             Path(config_dir).mkdir(parents=True, exist_ok=True)
             env[provider["envVar"]] = config_dir
+            if provider["id"] == "claude":
+                wrapper = claude_browser_wrapper(account)
+                if wrapper:
+                    env["BROWSER"] = wrapper
         return env
 
     def workspace_profile_key(self, workspace: dict) -> str:
@@ -558,6 +612,10 @@ class AccountManagerApp:
             config_dir = expand_path(account["configDir"])
             Path(config_dir).mkdir(parents=True, exist_ok=True)
             env[provider["envVar"]] = config_dir
+            if provider["id"] == "claude":
+                wrapper = claude_browser_wrapper(account)
+                if wrapper:
+                    env["BROWSER"] = wrapper
         # -claude-fix- Start provider CLIs directly with subprocess, keeping missing CLIs blocked by prior detection.
         subprocess.Popen(
             [command] + split_args(args),
