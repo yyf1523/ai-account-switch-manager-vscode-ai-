@@ -260,6 +260,14 @@ def hidden_startupinfo() -> subprocess.STARTUPINFO | None:
     return startupinfo
 
 
+def quiet_cli_env(env: dict[str, str]) -> dict[str, str]:
+    # -claude-fix- Suppress Node runtime warnings emitted by provider CLIs during background status checks.
+    env["NODE_NO_WARNINGS"] = "1"
+    env.setdefault("NO_COLOR", "1")
+    env.setdefault("CI", "1")
+    return env
+
+
 def find_browser_executable() -> str:
     candidates = [
         os.environ.get("PROGRAMFILES", "") + r"\Google\Chrome\Application\chrome.exe",
@@ -748,6 +756,7 @@ class AccountManagerApp:
             Path(config_dir).mkdir(parents=True, exist_ok=True)
             env[provider["envVar"]] = config_dir
             env.update(account_browser_launcher(account, open_mail=login))
+        env = quiet_cli_env(env)
         if login:
             self.log(f"{provider_id} login -> {account['id']} <{account.get('email', '')}>. {self.t('login_hint')}")
         # -claude-fix- Start provider CLIs directly with subprocess, keeping missing CLIs blocked by prior detection.
@@ -945,16 +954,19 @@ class AccountManagerApp:
         env = os.environ.copy()
         if provider.get("envVar"):
             env[provider["envVar"]] = expand_path(account.get("configDir", ""))
+        env = quiet_cli_env(env)
         try:
             result = subprocess.run(
                 [command] + split_args(status_args),
                 cwd=str(app_dir()),
                 env=env,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 timeout=10,
                 creationflags=hidden_process_flags(),
                 startupinfo=hidden_startupinfo(),
+                stdin=subprocess.DEVNULL,
             )
             output = (result.stdout or "") + (result.stderr or "")
             if provider["id"] == "claude":
