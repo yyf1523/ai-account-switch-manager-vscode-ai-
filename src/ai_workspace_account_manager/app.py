@@ -224,6 +224,13 @@ def detached_flags() -> int:
     return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
+def hidden_process_flags() -> int:
+    if os.name != "nt":
+        return 0
+    # -claude-fix- Hide provider login helper consoles; the browser window is the intended login UI.
+    return detached_flags() | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def find_browser_executable() -> str:
     candidates = [
         os.environ.get("PROGRAMFILES", "") + r"\Microsoft\Edge\Application\msedge.exe",
@@ -323,8 +330,8 @@ class AccountManagerApp:
 
     def build_ui(self) -> None:
         self.root.title(APP_NAME)
-        self.root.geometry("1180x820")
-        self.root.minsize(1080, 720)
+        self.root.geometry("1440x900")
+        self.root.minsize(1320, 780)
 
         style = ttk.Style()
         if "clam" in style.theme_names():
@@ -359,7 +366,7 @@ class AccountManagerApp:
         workspace.pack(fill=X)
         self.workspace_label = ttk.Label(workspace, width=14)
         self.workspace_label.pack(side=LEFT)
-        self.workspace_box = ttk.Combobox(workspace, textvariable=self.workspace_var, state="readonly", width=36)
+        self.workspace_box = ttk.Combobox(workspace, textvariable=self.workspace_var, state="readonly", width=50)
         self.workspace_box.bind("<<ComboboxSelected>>", lambda _event: self.refresh_workspace_selection())
         self.workspace_box.pack(side=LEFT, padx=(0, 12))
         self.add_workspace_button = ttk.Button(workspace, command=self.add_workspace)
@@ -383,7 +390,8 @@ class AccountManagerApp:
         for row, provider in enumerate(self.config["providers"]):
             ttk.Label(provider_frame, text=provider["name"], width=14).grid(row=row, column=0, sticky="w", pady=4)
             var = StringVar()
-            box = ttk.Combobox(provider_frame, textvariable=var, state="readonly", width=40)
+            # -claude-fix- Widen account selectors so long account ids and emails remain visible.
+            box = ttk.Combobox(provider_frame, textvariable=var, state="readonly", width=64)
             box.provider_id = provider["id"]  # type: ignore[attr-defined]
             box.bind("<<ComboboxSelected>>", self.provider_selection_changed)
             box.grid(row=row, column=1, sticky="w", padx=(0, 10), pady=4)
@@ -415,7 +423,7 @@ class AccountManagerApp:
         self.status_panel = status_panel
 
         self.accounts_tree = ttk.Treeview(account_panel, columns=("provider", "account", "email", "config"), show="headings", height=9)
-        for col, width in (("provider", 90), ("account", 120), ("email", 190), ("config", 260)):
+        for col, width in (("provider", 110), ("account", 180), ("email", 260), ("config", 520)):
             self.accounts_tree.heading(col, text=col)
             self.accounts_tree.column(col, width=width, stretch=True)
         self.accounts_tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
@@ -424,15 +432,15 @@ class AccountManagerApp:
         account_inputs.pack(fill=X)
         self.account_provider_box = ttk.Combobox(account_inputs, textvariable=self.account_provider_var, state="readonly", width=12)
         self.account_provider_box.pack(side=LEFT, padx=(0, 8))
-        ttk.Entry(account_inputs, textvariable=self.account_id_var, width=18).pack(side=LEFT, padx=(0, 8))
-        ttk.Entry(account_inputs, textvariable=self.account_email_var, width=30).pack(side=LEFT, padx=(0, 8))
+        ttk.Entry(account_inputs, textvariable=self.account_id_var, width=26).pack(side=LEFT, padx=(0, 8))
+        ttk.Entry(account_inputs, textvariable=self.account_email_var, width=42).pack(side=LEFT, padx=(0, 8))
         self.add_account_button = ttk.Button(account_inputs, command=self.add_account)
         self.add_account_button.pack(side=LEFT, padx=4)
         self.delete_account_button = ttk.Button(account_inputs, command=self.delete_account)
         self.delete_account_button.pack(side=LEFT, padx=4)
 
         self.status_tree = ttk.Treeview(status_panel, columns=("provider", "account", "email", "cli", "status"), show="headings", height=9)
-        for col, width in (("provider", 90), ("account", 120), ("email", 190), ("cli", 100), ("status", 180)):
+        for col, width in (("provider", 110), ("account", 180), ("email", 260), ("cli", 120), ("status", 260)):
             self.status_tree.heading(col, text=col)
             self.status_tree.column(col, width=width, stretch=True)
         self.status_tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
@@ -648,7 +656,7 @@ class AccountManagerApp:
             [command] + split_args(args),
             cwd=workspace.get("cwd") or app_dir(),
             env=env,
-            creationflags=detached_flags(),
+            creationflags=hidden_process_flags() if login else detached_flags(),
         )
 
     def switch_provider_account(self, provider_id: str) -> None:
