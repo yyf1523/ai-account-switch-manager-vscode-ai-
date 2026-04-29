@@ -151,9 +151,14 @@ def default_config() -> dict:
 
 def normalize_config(config: dict) -> dict:
     defaults = default_config()
+    # -claude-fix- Migrate legacy desktop config while preserving accounts and workspace mappings.
+    legacy_language = config.get("language")
     config.setdefault("settings", {})
+    had_settings_language = bool(config["settings"].get("language"))
     for key, value in defaults["settings"].items():
         config["settings"].setdefault(key, value)
+    if legacy_language and not had_settings_language:
+        config["settings"]["language"] = legacy_language
     config.setdefault("providers", defaults["providers"])
     config.setdefault("accounts", [])
     config.setdefault("workspaces", [])
@@ -163,7 +168,8 @@ def normalize_config(config: dict) -> dict:
         if provider["id"] not in existing_provider_ids:
             config["providers"].append(provider)
     for provider in config["providers"]:
-        provider.setdefault("name", provider["id"])
+        # -claude-fix- Reuse legacy zh/en provider labels instead of falling back to raw provider ids.
+        provider.setdefault("name", provider.get("zh") or provider.get("en") or provider["id"])
         provider.setdefault("command", "")
         provider.setdefault("envVar", "")
         provider.setdefault("accountsRoot", str(Path(config["settings"]["accountRoot"]) / provider["id"]))
