@@ -42,6 +42,9 @@ TEXT = {
         "saved": "已保存配置。",
         "no_cli": "该平台 CLI 不存在，请先安装或在 config.json 配置 command。",
         "no_vscode": "未找到 VS Code，请在 config.json 配置 settings.vscodeCommand。",
+        "subtitle": "账号登录一次长期保存，工作空间自动切换专属环境",
+        "login_hint": "将打开该账号的专属浏览器窗口；请在里面登录对应邮箱，登录态会保存在账号目录。",
+        "switch_hint": "已切换账号。已打开的 VS Code 不会自动换环境，请重新打开对应工作空间。",
         "lang": "English",
     },
     "en": {
@@ -69,6 +72,9 @@ TEXT = {
         "saved": "Config saved.",
         "no_cli": "This provider CLI is missing. Install it or set command in config.json.",
         "no_vscode": "VS Code was not found. Set settings.vscodeCommand in config.json.",
+        "subtitle": "Login once, keep sessions, and auto-switch accounts per workspace",
+        "login_hint": "A dedicated browser window will open for this account. Sign in with the matching email; the session stays in the account folder.",
+        "switch_hint": "Account switched. Existing VS Code windows keep their old environment; reopen the workspace.",
         "lang": "中文",
     },
 }
@@ -231,41 +237,49 @@ def find_browser_executable() -> str:
     return shutil.which("msedge") or shutil.which("chrome") or ""
 
 
-def claude_browser_wrapper(account: dict) -> str:
+def launch_browser_url(url: str) -> int:
+    browser = os.environ.get("AIAM_BROWSER_EXE") or find_browser_executable()
+    profile = os.environ.get("AIAM_BROWSER_PROFILE_DIR")
+    if not browser or not profile:
+        return 1
+    Path(profile).mkdir(parents=True, exist_ok=True)
+    # -claude-fix- Let the packaged Python app act as a no-console OAuth browser launcher.
+    subprocess.Popen([browser, f"--user-data-dir={profile}", "--no-first-run", "--new-window", url], creationflags=detached_flags())
+    return 0
+
+
+def account_browser_launcher(account: dict) -> dict[str, str]:
     config_dir = Path(expand_path(account.get("configDir", "")))
     browser = find_browser_executable()
     if os.name != "nt" or not browser or not config_dir:
-        return ""
+        return {}
     browser_profile = config_dir / "browser-profile"
     browser_profile.mkdir(parents=True, exist_ok=True)
+    env = {
+        "AIAM_BROWSER_EXE": browser,
+        "AIAM_BROWSER_PROFILE_DIR": str(browser_profile),
+    }
+    if getattr(sys, "frozen", False):
+        env["BROWSER"] = sys.executable
+        return env
     wrapper = config_dir / "open-claude-login.cmd"
-    ps_wrapper = config_dir / "open-claude-login.ps1"
-    # -claude-fix- Open Claude OAuth in a per-account browser profile so login does not reuse another Claude.ai session.
-    ps_wrapper.write_text(
-        "\r\n".join(
-            [
-                "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Url)",
-                f"$browser = '{browser}'",
-                f"$profile = '{browser_profile}'",
-                "$arguments = @('--user-data-dir=' + $profile, '--no-first-run', '--new-window') + $Url",
-                "Start-Process -FilePath $browser -ArgumentList $arguments",
-                "",
-            ]
-        ),
-        encoding="ascii",
-    )
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    launcher = str(pythonw if pythonw.exists() else Path(sys.executable))
+    run_script = Path(__file__).resolve().parents[2] / "run.py"
+    # -claude-fix- Development fallback avoids PowerShell while preserving each account's browser login state.
     wrapper.write_text(
         "\r\n".join(
             [
                 "@echo off",
-                f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{ps_wrapper}" %*',
+                f'start "" "{launcher}" "{run_script}" %*',
                 "exit /b 0",
                 "",
             ]
         ),
         encoding="ascii",
     )
-    return str(wrapper)
+    env["BROWSER"] = str(wrapper)
+    return env
 
 
 class AccountManagerApp:
@@ -315,13 +329,29 @@ class AccountManagerApp:
         style = ttk.Style()
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure("Primary.TButton", padding=(10, 5))
-        style.configure("Danger.TButton", padding=(10, 5))
+        # -claude-fix- Use a softer anime-inspired palette while keeping the desktop tool readable.
+        self.root.configure(bg="#f8f4ff")
+        style.configure(".", background="#f8f4ff", foreground="#34284f", font=("Microsoft YaHei UI", 9))
+        style.configure("TFrame", background="#f8f4ff")
+        style.configure("TLabelframe", background="#f8f4ff", foreground="#6d5bb8")
+        style.configure("TLabelframe.Label", background="#f8f4ff", foreground="#6d5bb8", font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("TLabel", background="#f8f4ff", foreground="#34284f")
+        style.configure("Hero.TLabel", background="#f8f4ff", foreground="#7b62d9", font=("Microsoft YaHei UI", 17, "bold"))
+        style.configure("Subtle.TLabel", background="#f8f4ff", foreground="#8b7ab8")
+        style.configure("TButton", padding=(10, 5), background="#efe7ff", foreground="#34284f")
+        style.map("TButton", background=[("active", "#e3d6ff")])
+        style.configure("Accent.TButton", padding=(12, 6), background="#dcd0ff", foreground="#2f2550")
+        style.configure("Treeview", background="#fffaff", fieldbackground="#fffaff", foreground="#34284f", rowheight=24)
+        style.configure("Treeview.Heading", background="#eadfff", foreground="#5b4a9c", font=("Microsoft YaHei UI", 9, "bold"))
 
         top = ttk.Frame(self.root, padding=16)
         top.pack(fill=X)
-        self.title_label = ttk.Label(top, font=("Microsoft YaHei UI", 16, "bold"))
+        title_group = ttk.Frame(top)
+        title_group.pack(side=LEFT)
+        self.title_label = ttk.Label(title_group, style="Hero.TLabel")
         self.title_label.pack(side=LEFT)
+        self.subtitle_label = ttk.Label(title_group, style="Subtle.TLabel")
+        self.subtitle_label.pack(anchor="w")
         self.lang_button = ttk.Button(top, command=self.toggle_language)
         self.lang_button.pack(side=RIGHT)
 
@@ -334,7 +364,7 @@ class AccountManagerApp:
         self.workspace_box.pack(side=LEFT, padx=(0, 12))
         self.add_workspace_button = ttk.Button(workspace, command=self.add_workspace)
         self.add_workspace_button.pack(side=LEFT, padx=4)
-        self.open_vscode_button = ttk.Button(workspace, command=self.open_vscode)
+        self.open_vscode_button = ttk.Button(workspace, command=self.open_vscode, style="Accent.TButton")
         self.open_vscode_button.pack(side=LEFT, padx=4)
         self.save_button = ttk.Button(workspace, command=self.save_workspace_mappings)
         self.save_button.pack(side=LEFT, padx=4)
@@ -412,6 +442,7 @@ class AccountManagerApp:
     def apply_language(self) -> None:
         self.root.title(self.t("title"))
         self.title_label.configure(text=self.t("title"))
+        self.subtitle_label.configure(text=self.t("subtitle"))
         self.lang_button.configure(text=self.t("lang"))
         self.workspace_label.configure(text=self.t("workspace"))
         self.path_label.configure(text=self.t("path"))
@@ -555,10 +586,7 @@ class AccountManagerApp:
             config_dir = expand_path(account["configDir"])
             Path(config_dir).mkdir(parents=True, exist_ok=True)
             env[provider["envVar"]] = config_dir
-            if provider["id"] == "claude":
-                wrapper = claude_browser_wrapper(account)
-                if wrapper:
-                    env["BROWSER"] = wrapper
+            env.update(account_browser_launcher(account))
         return env
 
     def workspace_profile_key(self, workspace: dict) -> str:
@@ -612,10 +640,9 @@ class AccountManagerApp:
             config_dir = expand_path(account["configDir"])
             Path(config_dir).mkdir(parents=True, exist_ok=True)
             env[provider["envVar"]] = config_dir
-            if provider["id"] == "claude":
-                wrapper = claude_browser_wrapper(account)
-                if wrapper:
-                    env["BROWSER"] = wrapper
+            env.update(account_browser_launcher(account))
+        if login:
+            self.log(f"{provider_id} login -> {account['id']} <{account.get('email', '')}>. {self.t('login_hint')}")
         # -claude-fix- Start provider CLIs directly with subprocess, keeping missing CLIs blocked by prior detection.
         subprocess.Popen(
             [command] + split_args(args),
@@ -640,7 +667,7 @@ class AccountManagerApp:
         workspace["mappings"][provider_id] = next_account["id"]
         self.select_provider_value(provider_id, next_account["id"])
         self.save_config()
-        self.log(f"{provider_id} -> {next_account['id']} <{next_account['email']}>")
+        self.log(f"{provider_id} -> {next_account['id']} <{next_account['email']}>. {self.t('switch_hint')}")
 
     def add_workspace(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("VS Code workspace", "*.code-workspace"), ("All files", "*.*")])
