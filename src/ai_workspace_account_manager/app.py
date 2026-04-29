@@ -218,10 +218,24 @@ def resolve_command(command: str) -> str:
 
 
 def provider_runtime_command(provider: dict) -> str:
+    # -claude-fix- Resolve provider launch commands to native executables or JS entrypoints instead of npm cmd wrappers.
     command = resolve_command(provider.get("command", ""))
-    if provider.get("id") != "claude" or not command:
-        return command
+    if not command:
+        return ""
     path = Path(command)
+    if provider.get("id") in {"openai", "gemini"} and path.suffix.lower() == ".cmd":
+        node = path.parent / "node.exe"
+        node_command = str(node if node.exists() else (shutil.which("node") or "node"))
+        if provider.get("id") == "openai":
+            script = path.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+            if script.exists():
+                return node_command + "\n" + str(script)
+        if provider.get("id") == "gemini":
+            script = path.parent / "node_modules" / "@google" / "gemini-cli" / "bundle" / "gemini.js"
+            if script.exists():
+                return node_command + "\n--no-warnings=DEP0040\n" + str(script)
+    if provider.get("id") != "claude":
+        return command
     roots = [path.parent, Path(r"D:\WorkForTellHow\project\dev-tool\npm-global"), Path(r"D:\360MoveData\Users\zwgp2\Desktop\WorkForTellHow\project\dev-tool\npm-global")]
     for root in roots:
         candidate = root / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
@@ -229,6 +243,13 @@ def provider_runtime_command(provider: dict) -> str:
             # -claude-fix- Prefer Claude's native exe over claude.cmd to avoid visible cmd windows.
             return str(candidate)
     return command
+
+
+def command_parts(command: str) -> list[str]:
+    # -claude-fix- Allow resolved runtime commands to include a node binary plus script and flags.
+    if "\n" in command:
+        return command.splitlines()
+    return [command]
 
 
 def split_args(args: str) -> list[str]:
@@ -761,7 +782,7 @@ class AccountManagerApp:
             self.log(f"{provider_id} login -> {account['id']} <{account.get('email', '')}>. {self.t('login_hint')}")
         # -claude-fix- Start provider CLIs directly with subprocess, keeping missing CLIs blocked by prior detection.
         subprocess.Popen(
-            [command] + split_args(args),
+            command_parts(command) + split_args(args),
             cwd=workspace.get("cwd") or app_dir(),
             env=env,
             creationflags=hidden_process_flags() if login else detached_flags(),
@@ -957,7 +978,7 @@ class AccountManagerApp:
         env = quiet_cli_env(env)
         try:
             result = subprocess.run(
-                [command] + split_args(status_args),
+                command_parts(command) + split_args(status_args),
                 cwd=str(app_dir()),
                 env=env,
                 stdout=subprocess.PIPE,
