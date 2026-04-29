@@ -150,6 +150,8 @@ def default_config() -> dict:
             "vscodeCommand": "code",
             "profileRoot": profile_root,
             "accountRoot": account_root,
+            "vscodeTemplateProfile": str(Path(os.environ.get("APPDATA", str(Path.home()))) / "Code"),
+            "vscodeExtensionsDir": str(Path.home() / ".vscode" / "extensions"),
         },
         "providers": providers,
         "accounts": [],
@@ -328,6 +330,50 @@ def account_browser_launcher(account: dict, open_mail: bool = False) -> dict[str
     )
     env["BROWSER"] = str(wrapper)
     return env
+
+
+def is_ai_storage_path(path: Path) -> bool:
+    text = str(path).lower()
+    return any(token in text for token in ("anthropic", "claude", "codex", "openai", "gemini", "glm", "deepseek"))
+
+
+def ensure_vscode_profile(profile_dir: Path, template_dir: Path) -> None:
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    marker = profile_dir / ".aiam-template-ready"
+    if marker.exists():
+        return
+    if not template_dir.exists():
+        marker.write_text("no-template", encoding="utf-8")
+        return
+
+    skip_names = {
+        "Cache",
+        "CachedData",
+        "Code Cache",
+        "Crashpad",
+        "GPUCache",
+        "logs",
+        "Network",
+        "Session Storage",
+        "Service Worker",
+        "workspaceStorage",
+    }
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        ignored = set()
+        current = Path(directory)
+        for name in names:
+            child = current / name
+            if name in skip_names or is_ai_storage_path(child):
+                ignored.add(name)
+        return ignored
+
+    # -claude-fix- Seed isolated VS Code profiles from the user's normal profile while skipping AI login state.
+    try:
+        shutil.copytree(template_dir, profile_dir, dirs_exist_ok=True, ignore=ignore)
+        marker.write_text(str(template_dir), encoding="utf-8")
+    except Exception as exc:
+        marker.write_text(f"partial-template: {exc}", encoding="utf-8")
 
 
 class AccountManagerApp:
@@ -663,11 +709,18 @@ class AccountManagerApp:
         target = workspace["path"] if Path(workspace["path"]).exists() else workspace["cwd"]
         profile_root = Path(expand_path(self.config["settings"]["profileRoot"]))
         profile_dir = profile_root / safe_path_segment(workspace["id"] + "-" + self.workspace_profile_key(workspace))
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        template_dir = Path(expand_path(self.config["settings"].get("vscodeTemplateProfile", "")))
+        ensure_vscode_profile(profile_dir, template_dir)
+        extensions_dir = Path(expand_path(self.config["settings"].get("vscodeExtensionsDir", "")))
         env = self.build_workspace_env(workspace)
+        args = [vscode, "--new-window", "--user-data-dir", str(profile_dir)]
+        if extensions_dir.exists():
+            # -claude-fix- Reuse the user's installed VS Code extensions so Claude/Copilot plugins are available.
+            args.extend(["--extensions-dir", str(extensions_dir)])
+        args.append(target)
         # -claude-fix- Start VS Code directly with subprocess and the selected account environment.
         subprocess.Popen(
-            [vscode, "--new-window", "--user-data-dir", str(profile_dir), target],
+            args,
             cwd=workspace.get("cwd") or app_dir(),
             env=env,
             creationflags=detached_flags(),
